@@ -1,0 +1,196 @@
+<!-- frontend/index.html -->
+<!doctype html>
+<html lang="en" style="color-scheme: light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jev | PDF Parsing Demo</title>
+  <link rel="stylesheet" href="https://unpkg.com/@knadh/oat@0.8.0/oat.min.css">
+  <script src="https://unpkg.com/@knadh/oat@0.8.0/oat.min.js" defer></script>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body style="color-scheme: light">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="app-header">
+    <div class="app-header-titles">
+      <h1>Parse the data you need with Jev</h1>
+      <p class="app-subtitle">PDF parsing demo &middot; Ask questions. Find the matching data.</p>
+    </div>
+    <ot-dropdown class="session-menu">
+      <button type="button" class="outline" id="session-trigger" popovertarget="session-access">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg>
+        API key <span class="key-status" id="key-trigger-status">Not set</span>
+      </button>
+      <section class="card panel-body session-access" id="session-access" popover aria-labelledby="session-title">
+      <h2 class="section-title" id="session-title">Session access</h2>
+      <div class="field-stack">
+        <div data-field>
+          <label for="api-key">TypeSafe API key</label>
+          <div class="input-with-action">
+            <input type="password" id="api-key" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="api-key-hint" placeholder="Paste your API key">
+            <button type="button" class="ghost small" id="toggle-api-key" aria-pressed="false" aria-controls="api-key" aria-label="Show API key" title="Show API key">
+              <svg class="eye-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                <circle cx="12" cy="12" r="3" />
+                <path class="eye-slash" d="m3 3 18 18" />
+              </svg>
+            </button>
+          </div>
+          <small data-hint id="api-key-hint">Session only. Cleared on refresh or leaving this page.</small>
+        </div>
+        <div class="session-actions">
+          <small role="status" id="api-key-status">Add a key to enable evaluation.</small>
+          <button type="button" class="outline small" id="clear-api-key" disabled>Clear key</button>
+        </div>
+      </div>
+      </section>
+    </ot-dropdown>
+  </header>
+
+  <div class="app-layout">
+    <aside class="settings" id="sidebar">
+      <section class="card panel-body">
+        <h2 class="section-title"><span class="step-number">1</span> Add a document</h2>
+
+        <div class="page-scope field-stack">
+          <label data-field for="page-scope">Pages to evaluate
+            <select id="page-scope"><option value="all">All pages</option><option value="first">First N pages</option></select>
+          </label>
+          <label data-field for="page-limit" id="page-limit-field" hidden>Number of pages
+            <input type="number" id="page-limit" min="1" max="200" step="1" value="1" required>
+          </label>
+          <small data-hint>Choose before upload. Evaluation starts only when you run it.</small>
+        </div>
+        <ot-tabs id="source-tabs">
+          <div role="tablist" aria-label="Document source">
+            <button type="button" role="tab" id="tab-upload">Upload</button>
+            <button type="button" role="tab" id="tab-samples">Samples</button>
+          </div>
+
+          <div role="tabpanel">
+            <ot-upload>
+              <div data-field class="vstack">
+                <input type="file" id="file-input" name="file" accept="application/pdf" hidden aria-describedby="upload-hint">
+                <strong>Drop a PDF here</strong>
+                <button type="button" class="outline">Choose PDF</button>
+                <div data-files>
+                  <small data-hint id="upload-hint">PDF files up to 20 MB.</small>
+                </div>
+              </div>
+            </ot-upload>
+          </div>
+
+          <div role="tabpanel">
+            <div class="sample-list" id="sample-list"></div>
+          </div>
+        </ot-tabs>
+
+        <div class="field-stack document-selected" id="document-selected" hidden>
+          <p><strong id="doc-filename-label"></strong></p>
+          <p class="text-light" id="doc-page-count-label"></p>
+          <button type="button" class="outline" id="replace-pdf">Replace PDF</button>
+        </div>
+
+        <p role="status" class="text-light" id="upload-status"></p>
+      </section>
+
+      <section class="panel-body evaluation-settings">
+        <h2 class="section-title"><span class="step-number">2</span> Ask your questions</h2>
+        <div class="field-stack">
+          <label data-field for="questions">
+            Questions
+            <textarea id="questions" rows="4" aria-describedby="questions-hint"></textarea>
+          </label>
+          <small data-hint id="questions-hint">One question per line.</small>
+
+          <label data-field for="threshold">
+            Minimum chunk probability
+            <input type="number" id="threshold" min="0" max="1" step="0.01" value="0.9" required>
+          </label>
+
+
+          <button type="button" id="evaluate-button" class="full-width" disabled>Run evaluation</button>
+          <small data-hint role="status" id="evaluate-hint">Upload a document to enable evaluation.</small>
+          <small data-hint>Evaluation sends text from the selected pages to TypeSafe.</small>
+        </div>
+      </section>
+    </aside>
+
+    <main class="workspace" id="main-content">
+      <div class="empty-state-wrap" id="empty-state">
+        <div class="empty-state-card">
+          <svg class="empty-document-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
+          <h2>Your document workspace</h2>
+          <p>Use Upload or Samples to get started.</p>
+          <small>Preview your PDF, inspect its text, and match data to your questions.</small>
+        </div>
+      </div>
+
+      <div class="workspace-loaded" id="grid" hidden>
+        <div id="batch-progress" hidden>
+          <progress id="batch-progress-bar"></progress>
+          <small id="batch-progress-text"></small>
+        </div>
+
+        <div class="inspection-grid">
+          <section class="card panel-body eval-results" id="eval-results-section">
+            <h2 class="section-title">Questions &amp; answers</h2>
+            <p id="batch-summary" class="evaluation-time" hidden><span id="summary-caption"></span></p>
+            <p id="page-timing" class="evaluation-time"></p>
+            <small class="probability-legend">Match probability: high 80%+ / medium 50% to under 80% / low below 50%.</small>
+            <div id="results-pane" role="region" aria-label="Question and answer results" tabindex="0" aria-live="polite"></div>
+          </section>
+
+          <section class="card inspection-panel">
+            <header class="panel-header">
+              <h2 class="section-title">Page preview</h2>
+              <label class="switch-field">
+                <input type="checkbox" role="switch" id="show-boxes" checked>
+                Show bounding boxes
+              </label>
+            </header>
+            <div class="panel-body">
+              <div class="preview-controls" role="group" aria-label="PDF zoom controls">
+                <button type="button" class="outline small" id="zoom-out" aria-label="Zoom out">−</button>
+                <output id="zoom-level" aria-live="polite">100%</output>
+                <button type="button" class="outline small" id="zoom-in" aria-label="Zoom in">+</button>
+                <button type="button" class="outline small" id="fit-width" aria-pressed="true">Fit width</button>
+                <button type="button" class="outline small" id="fit-page" aria-pressed="false">Fit page</button>
+              </div>
+              <div class="preview-stage" id="preview-stage" tabindex="0" role="region" aria-label="PDF page preview, scroll to explore the enlarged page">
+                <div class="preview-frame" id="preview-frame"></div>
+              </div>
+              <p class="text-light" id="preview-meta"></p>
+            </div>
+            <footer class="preview-footer">          <div class="pdf-nav">
+            <button type="button" class="outline" id="prev-page">Previous</button>
+            <span id="page-indicator" aria-live="polite"></span>
+            <button type="button" class="outline" id="next-page">Next</button>
+          </div></footer>
+          </section>
+        </div>
+
+        <button type="button" class="ghost small" id="open-text">View extracted text</button>
+      </div>
+    </main>
+  </div>
+  <dialog id="answer-dialog" aria-labelledby="answer-title">
+    <h2 id="answer-title">Full match</h2>
+    <p id="full-answer"></p>
+    <form method="dialog"><button class="outline">Close</button></form>
+  </dialog>
+  <dialog id="text-dialog" aria-labelledby="text-title">
+    <header class="text-dialog-header">
+      <h2 id="text-title">Extracted text</h2>
+      <form method="dialog" class="text-dialog-actions">
+        <button type="button" class="outline small" id="copy-text">Copy text</button>
+        <button type="submit" class="outline small">Close</button>
+      </form>
+    </header>
+    <div class="text-output" id="text-output"></div>
+  </dialog>
+  <script src="./config.js" defer></script>
+  <script src="./app.js" defer></script>
+</body>
+</html>
