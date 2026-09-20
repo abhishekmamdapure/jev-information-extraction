@@ -6,6 +6,12 @@
 !frontend/
 !frontend/**
 !sample_questions.txt
+!sample_pdf/
+!sample_pdf/invoice_51109306.pdf
+!sample_pdf/invoice_51109307.pdf
+!sample_pdf/invoice_51109308.pdf
+!sample_pdf/invoice_51109309.pdf
+!sample_pdf/invoice_51109310.pdf
 **/__pycache__/
 **/*.pyc
 **/*.md
