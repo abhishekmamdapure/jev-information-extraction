@@ -1,0 +1,12 @@
+**
+!Dockerfile
+!requirements.txt
+!backend/
+!backend/**
+!frontend/
+!frontend/**
+!sample_questions.txt
+**/__pycache__/
+**/*.pyc
+**/*.md
+backend/tests/
