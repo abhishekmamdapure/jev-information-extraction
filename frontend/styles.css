@@ -312,6 +312,8 @@ ot-upload {
 .page-scope {
   margin-bottom: 1rem;
 }
+.dataset-link { display: inline-flex; align-items: center; gap: 0.25rem; text-decoration: underline; }
+.dataset-hint { display: block; margin-bottom: 0.5rem; }
 .evaluation-summary summary {
   font-size: 0.8125rem;
 }

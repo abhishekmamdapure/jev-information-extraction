@@ -1,12 +1,78 @@
-# PDF Inspector — minimal local demo
+# Jev Information Extraction
 
-A Python **FastAPI** backend with a static **Oat UI** frontend, using Firecrawl's **pdf-inspector 1.21.0** for all text extraction and positioning. PDFium renders the original page; Pillow draws the boxes. No Node.js, Rust build, API key, Poppler installation, or hosted service is required on supported wheel platforms.
+Ask questions about a PDF. Use Jev to rank the source text that answers them. Inspect each match, its probability, and its location on the original page.
 
-## Run in VS Code on Windows
+This interactive demo uses **TypeSafe's `jev-latest` model** through the Python SDK's `system_one` API. It turns extracted PDF text into candidate answers for natural-language questions such as ?What is the GST number?? or ?What is the total invoice amount??. A FastAPI service runs the evaluation and serves the Oat UI frontend from one URL.
 
-1. Install **64-bit Python 3.12** from https://www.python.org/downloads/ if needed. Include the Python launcher during installation.
-2. Extract this ZIP. Open the inner `pdf-inspector-demo` folder in VS Code (the folder containing `backend/`, `frontend/`, and `requirements.txt`).
-3. Choose **Terminal → New Terminal**. In PowerShell run these commands one at a time:
+## How Jev is used
+
+1. **Read the PDF:** `pdf-inspector` extracts embedded text chunks and their positions. PDFium renders the page. This step does not call Jev.
+2. **Create candidate answers:** for each question, the backend creates a TypeSafe `Choice`. Its instructions contain the question; its criteria map page-local chunk indexes to the extracted text.
+3. **Evaluate with Jev:** the backend sends the page text and all questions for that page to `client.system_one(..., model='jev-latest')`.
+4. **Rank the results:** returned probabilities are mapped back to the original chunks. The UI shows the highest-scoring chunk and an expandable second-best match.
+5. **Inspect the evidence:** red boxes mark qualifying chunks on the PDF. Zoom and page navigation let you check the source beside the answers.
+
+The core call follows this pattern:
+
+```python
+from typesafe_sdk import Choice, TypeSafeClient
+
+questions = {
+    'q1': Choice(
+        instructions='What is the total invoice amount?',
+        criteria={str(i): item['text'] for i, item in enumerate(page_items)},
+    )
+}
+
+with TypeSafeClient(api_key=session_key) as client:
+    response = client.system_one(
+        state='\n'.join(item['text'] for item in page_items),
+        questions=questions,
+        model='jev-latest',
+    )
+```
+
+`page_items` comes from PDF extraction; `session_key` comes from the frontend. See `backend/main.py` for the complete implementation.
+
+## What ?evaluation? means here
+
+This is **question-to-text-chunk selection**, performed independently for each selected page. It is not a ground-truth benchmark, and the app does not calculate accuracy, precision, recall, or F1. A displayed probability is the model's score for a candidate, not a measured guarantee that the answer is correct.
+
+| UI result | Meaning |
+| --- | --- |
+| Primary answer | Highest-probability source chunk for that question on the current page |
+| Alternative match | Second-highest-probability chunk, when available |
+| Green meter | Probability at least 80% |
+| Amber meter | Probability at least 50% and below 80% |
+| Red meter | Probability below 50% |
+| Minimum chunk probability | Highlight cutoff, default `0.9`; does not change the model request or hide ranked answers |
+
+A chunk is highlighted if it meets the cutoff for **any** question. The app displays source text as extracted; it does not combine chunks into a rewritten answer or normalize values. For example, asking for ?only the number? does not guarantee removal of a currency label present in the matched chunk.
+
+**Run evaluation** processes all pages or the first N pages, with up to eight page tasks in parallel. Each nonempty page gets its own Jev request containing all questions. Pages without embedded text are skipped. Results remain page-specific; there is no cross-page answer aggregation.
+
+The UI shows total batch wall time and current-page render/evaluation timings. The batch render timing includes any wait for the rendering lock; it is not the duration of every subsequent preview refresh. The API also returns the resolved model name and token usage for successful page evaluations.
+
+## Run locally
+
+### Requirements
+
+- Git and 64-bit Python 3.12.
+- A TypeSafe API key with access to `jev-latest` for evaluation.
+- Internet access to install dependencies, load Oat UI assets, and call TypeSafe.
+
+PDF upload, extraction, and preview work without an API key. Node.js is not required.
+
+### 1. Clone the project
+
+```bash
+git clone https://github.com/abhishekmamdapure/jev-information-extraction.git
+cd jev-information-extraction
+```
+
+Run all following commands from this directory.
+
+### 2. Install and start ? Windows PowerShell
 
 ```powershell
 py -3.12 -m venv .venv
@@ -15,19 +81,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
 ```
 
-4. Open http://127.0.0.1:8000/ if the browser does not open automatically.
-5. Upload an invoice PDF. The right side displays the original PDF. Evaluate the page to show matching text and blue boxes.
-6. Set the probability threshold in the sidebar to filter matching chunks, or navigate to another page and evaluate it.
-7. Use the download buttons to save page text, the preview PNG, or JSON with text, original coordinates, font metadata, and rendered top-left boxes.
-8. Press **Ctrl+C** in the terminal to stop the app.
-
-Virtual-environment activation is unnecessary with these commands, so PowerShell execution-policy changes are unnecessary. If `py -3.12` fails, install Python 3.12 or use the full path to its `python.exe`. Avoid installing these requirements into an unrelated application environment.
-
-Optional VS Code debugging: install Microsoft's Python and Python Debugger extensions; use **Python: Select Interpreter** to select `.venv`; then press **F5** and select **PDF Inspector UI**. The included launch configuration starts uvicorn with `--reload`.
-
-## macOS / Linux
-
-Use Python 3.12:
+### 2. Install and start ? macOS / Linux
 
 ```bash
 python3.12 -m venv .venv
@@ -36,92 +90,98 @@ python3.12 -m venv .venv
 .venv/bin/python -m uvicorn backend.main:app --reload
 ```
 
-If port 8000 is occupied, append `--port 8001` to the run command and open http://127.0.0.1:8001/. Run from this project folder so relative paths (frontend static files, sample PDFs) resolve correctly.
+### 3. Open the app
 
-## Files
+Visit **http://127.0.0.1:8000/**. Keep the terminal running. Press **Ctrl+C** to stop the server.
 
-- `backend/main.py`: FastAPI app — document upload/sample endpoints, page item and PNG render endpoints, single-page and batch evaluate endpoints, and the static-file mount that serves `frontend/`.
-- `backend/inspector.py`: native extraction, coordinate transforms, PDF rendering and overlay drawing (canonical copy; the former root-level `inspector.py` was retired).
-- `backend/store.py`: in-memory per-document store.
-- `backend/schemas.py`: request/response models.
-- `backend/tests/`: pytest suite covering documents, pages, evaluate, evaluate-batch, store, and health endpoints.
-- `frontend/`: static Oat UI (`index.html`, `app.js`, `styles.css`) — sidebar source picker, PDF preview, page navigation, threshold slider, and the batch-evaluation timing table.
-- `requirements.txt`: pinned direct dependencies.
-- `.vscode/launch.json`: optional VS Code debugger configuration (launches uvicorn).
+If port 8000 is occupied, append `--port 8001` to the start command and open http://127.0.0.1:8001/ instead.
 
-## Coordinate conversion
+## Run your first Jev evaluation
 
-For an ordinary unrotated page, with visible page height H:
+1. Click **API key** at the top right and paste your TypeSafe key. The eye button toggles visibility.
+2. Choose **All pages** or **First N pages** before uploading. N must be between 1 and 200. This limits model evaluation, not initial PDF extraction.
+3. Upload a PDF or open one of the five invoice samples under **Samples**.
+4. Enter one question per line. For example:
 
-```python
-bbox = [x, H - y - height, x + width, H - y]
+   ```text
+   What is the GST number?
+   What is the total invoice amount?
+   What is the name of the seller?
+   What is the name of the buyer?
+   ```
+
+5. Click **Run evaluation**. Uploading alone does not make a TypeSafe request.
+6. Review the scrollable **Questions & answers** panel, probability meters, and alternative matches.
+7. Inspect the red boxes in **Page preview**. Use Fit width, Fit page, or the zoom buttons. Change **Minimum chunk probability** to adjust highlights without rerunning Jev.
+8. Use **Previous / Next** to inspect other pages. **View extracted text** opens the raw text with Copy and Close controls.
+
+## Deploy the complete app on Railway
+
+The frontend and API run as **one service**. The repository includes a Python 3.12 `Dockerfile`, `railway.json`, and the five sample PDFs.
+
+1. In Railway, create a project and select **Deploy from GitHub repo**.
+2. Connect this repository and select branch **main**.
+3. Leave Root Directory blank or set it to `/`.
+4. Let Railway use the root Dockerfile. Leave custom build and start commands blank: the Dockerfile installs dependencies and starts Uvicorn on Railway's `PORT`.
+5. The checked-in configuration sets one replica, `/api/health` as the health check, a 120-second health-check timeout, and restart on failure. Keep one worker and one replica because documents are stored in process memory.
+6. No app environment variables are required for this single-service setup. Do not add a TypeSafe key: users enter their own session key in the UI.
+7. Apply any staged changes and deploy. Wait for a successful deployment.
+8. Open **Settings ? Networking ? Generate Domain**. If prompted, select the port detected from the running service.
+9. Visit `https://YOUR-DOMAIN/api/health`; expect `{"status":"ok"}`. Open `https://YOUR-DOMAIN/` to use the app.
+10. Open a sample, enter a session key, and run an evaluation to verify the full flow.
+
+GitHub Pages and a separate frontend host are not needed. See the [Railway FastAPI guide](https://docs.railway.com/guides/fastapi) and [Docker start-command documentation](https://docs.railway.com/deployments/start-command).
+
+## Data handling and limits
+
+- The browser keeps the API key in the page's in-memory field, not browser storage. Refreshing, leaving the page, or selecting Clear key removes it from the UI.
+- Evaluation sends the key to the backend, which uses it in a request-scoped TypeSafe client. The app does not persist the key in files or environment variables.
+- Uploaded PDFs are processed on the backend host. For evaluation, page text, questions, and candidate text are sent to TypeSafe; the model call does not send the PDF image.
+- Documents and extracted data are retained in server process memory until restart. There is no user authentication, per-user document isolation, or automatic expiry. This is a demo, not a private multi-user document service.
+- PDFs must be no larger than 20 MB and contain 1?200 pages. Password-protected PDFs are unsupported.
+- Extraction uses existing embedded text. OCR is not enabled, so scanned pages without a text layer cannot be evaluated.
+- Chunk boundaries affect answer quality: a value split across multiple chunks is not automatically combined. Boxes reflect extracted text regions, not semantic fields.
+- Frontend preview rendering defaults to 2?, subject to a 3000-pixel longest-side cap. Display zoom is independent of rendering resolution.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| Run evaluation is disabled | Load a document, add a key and at least one question, and check the page limit. |
+| TypeSafe evaluation fails | Check the key's validity and model access; read the error displayed by the app. |
+| No embedded text | Use a text-based PDF; scanned images require OCR outside this demo. |
+| No red boxes | Run evaluation, enable Show bounding boxes, and check the highlight threshold. |
+| Page was not evaluated | Expand the selected page scope and run evaluation again. |
+| Document not found after deployment | The server restarted; upload the PDF again or reopen a sample. |
+| Railway build or startup fails | Check the first error in deployment logs, the main branch, repository root, and Dockerfile detection. |
+
+## Tests and code map
+
+Install pytest into the same environment used above, then run the tests:
+
+```powershell
+# Windows
+.\.venv\Scripts\python.exe -m pip install pytest
+.\.venv\Scripts\python.exe -m pytest backend/tests -q
 ```
 
-These are top-left-origin **PDF points**, not pixels. One point is 1/72 inch. `render_page` scales X and Y separately using the actual raster dimensions before drawing. For cropped pages, the extractor already expresses coordinates relative to the visible CropBox/MediaBox intersection: do not subtract the crop origin a second time.
+```bash
+# macOS / Linux
+.venv/bin/python -m pip install pytest
+.venv/bin/python -m pytest backend/tests -q
+```
 
-The extractor can rebase predominantly rotated text into a synthetic frame. The demo calls `extract_text_with_positions_and_rotations_bytes`, reverses that rebase, applies the PDF page's `/Rotate`, and finally flips Y. The original PDF is not modified on disk. JSON includes both the original item coordinates and `bbox_top_left_pt` for the displayed page.
+The tests check API behavior, document processing, and mocked evaluation flows. They do not measure Jev's real-world answer accuracy.
 
-**These are text-run font-metric boxes, not precise glyph outlines.** For horizontal text the box extends upward from the baseline by the reported height; descenders may fall below it. Unknown font advances may be estimated (`advance_known=false`). A returned item may contain a word, multiple words, or a line; the app draws one box per returned text item, not per character or semantic invoice field.
+| Path | Purpose |
+| --- | --- |
+| `backend/main.py` | Jev requests, candidate construction, page evaluation, API routes, frontend hosting |
+| `backend/inspector.py` | PDF extraction, rendering, coordinate mapping, red boxes |
+| `backend/store.py` | In-memory documents and rendering lock |
+| `backend/schemas.py` | Request validation |
+| `frontend/` | Oat UI, session key input, ranked answers, probability meters, PDF preview |
+| `sample_pdf/` | Five demo invoices |
+| `sample_questions.txt` | Default questions |
+| `Dockerfile`, `railway.json` | Single-service Railway deployment |
 
-## Scope
-
-### TypeSafe invoice extraction
-
-Use the header's **API key** button to enter your session key. Before uploading
-or choosing a sample, select **All pages** or **First N pages** (1-200).
-Local inspection reads the document to establish its page count; the selection
-limits evaluation, not local text extraction. Counts above the document length
-are capped to the available pages. Uploading does not call TypeSafe.
-Edit the questions, then select **Run evaluation** to process the chosen pages.
-
-Questions and answers appear beside the PDF, for the page selected in the toolbar.
-The strongest match is shown first; expand **Alternative match** for the runner-up.
-Probability meters use green for 80% and above, amber for 50% to below 80%, and
-red below 50%, with numeric and text labels. These are match probabilities.
-
-The **Minimum chunk probability** number field (default 0.9, range 0-1) controls which matches receive padded
-red outlines on the PDF. Changing it reuses existing results. Extracted text and
-per-page timings are available in expandable sections. Pages outside the selected
-scope remain available for inspection and are labeled as not evaluated.
-
-The key stays only in the browser's in-memory form field until refresh, navigation,
-tab closure, or **Clear key**. No browser storage or server environment key is used.
-It is sent directly in
-the evaluate request body to a request-scoped SDK client on the backend. It is not
-written to files, environment variables, URLs, caches, or application logs. PDF
-text extraction is local; evaluation sends current-page text and questions to
-TypeSafe.
-
-Run the backend test suite with `python -m pytest backend/tests`.
-
-### PDF inspector
-
-- Embedded text extraction only; OCR models are not loaded or downloaded. A scan without an existing text layer shows its page image and an explanatory message.
-- PDF inspection itself makes no LLM calls. The evaluation action uses TypeSafe.
-- Up to 20 MB and 200 pages. Preview's longest side is capped at 3000 pixels. All positions are extracted once per uploaded document; only the current page is rendered.
-- Current document metadata lives in the backend's in-memory store, keyed by document id, with no shared extraction cache across restarts. The app does not persist uploads to project files or send PDFs to a cloud service. Dependencies need internet access during installation.
-- Password-protected documents are not supported. Malformed files surface a readable error.
-- Intended as a local developer demo, not a public multi-user service.
-- Text is shown in extractor item order, one region per line; it is not a reconstruction of a formatted invoice table. The text-area content is a display; downloads use the extracted original text.
-
-## Verification performed
-
-Tested with Python 3.12 on Linux and the exact direct dependency versions in requirements.txt:
-
-- Native pdf-inspector extraction and PDFium rendering of synthetic invoice text.
-- Cropped pages with /Rotate values 0, 90, 180 and 270; computed boxes intersect the rendered text.
-- Dominant vertical text in both directions, including extractor frame rebasing.
-- Visual inspection of a rotated-page overlay.
-- Backend pytest suite (`backend/tests`): document upload and sample selection, page items and rendering, single-page and batch evaluation (including missing-key and empty-page cases), and the in-memory store.
-
-Windows setup commands are provided but were not executed on Windows in this environment. An actual user invoice has not been tested.
-
-## Upstream references
-
-- Repository: https://github.com/firecrawl/pdf-inspector
-- Python API: https://github.com/firecrawl/pdf-inspector/blob/main/docs/python.md
-- Bounding-box semantics: https://github.com/firecrawl/pdf-inspector/blob/main/src/types.rs
-- Frame conversion: https://github.com/firecrawl/pdf-inspector/blob/main/src/extractor/display_frame.rs
-- Dominant text rotation: https://github.com/firecrawl/pdf-inspector/blob/main/src/extractor/geometry.rs
-
-Firecrawl pdf-inspector is MIT licensed. This demo consumes its published package and does not bundle its source or native binary. Other installed dependencies retain their respective licenses.
+PDF extraction uses [Firecrawl pdf-inspector](https://github.com/firecrawl/pdf-inspector), rendering uses PDFium, and overlays use Pillow. Jev performs the candidate evaluation through TypeSafe.
