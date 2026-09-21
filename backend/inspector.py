@@ -1,5 +1,7 @@
 """Firecrawl extracts text; PDFium only renders pages; Pillow draws overlays."""
 import math
+import re
+
 import pdf_inspector
 import pypdfium2 as pdfium
 from PIL import ImageDraw
@@ -8,6 +10,36 @@ from backend.ocr_runtime import ensure_ocr_runtime
 
 FIELDS = ('text', 'page', 'x', 'y', 'width', 'height', 'font', 'font_size',
           'rotation', 'advance_known', 'is_bold', 'is_italic', 'item_type')
+
+_TABLE_RULE_RE = re.compile(r'^\|?[\s:|-]+\|?$')
+_HEADING_RE = re.compile(r'^#{1,6}\s*')
+_EMPHASIS_RE = re.compile(r'(\*{1,3}|_{1,3})(\S(?:.*?\S)?)\1')
+_WHITESPACE_RE = re.compile(r'[ \t]+')
+
+
+def clean_markdown(text: str) -> str:
+    """Strip Markdown table/heading/emphasis syntax OCR output carries.
+
+    OCR renders receipts and forms as Markdown tables even when the source
+    has no real grid, scattering values across pipe-delimited cells with no
+    semantic meaning. This flattens each line to plain words so a language
+    model reads it as text rather than parsing (and being misled by) table
+    structure that was never really there.
+    """
+    lines = []
+    for raw_line in text.split('\n'):
+        line = raw_line.strip()
+        if not line or _TABLE_RULE_RE.match(line):
+            continue
+        line = _HEADING_RE.sub('', line)
+        line = _EMPHASIS_RE.sub(r'\2', line)
+        if '|' in line:
+            cells = [cell.strip() for cell in line.strip('|').split('|')]
+            line = ' '.join(cell for cell in cells if cell)
+        line = _WHITESPACE_RE.sub(' ', line).strip()
+        if line:
+            lines.append(line)
+    return '\n'.join(lines)
 
 
 def inspect_pdf(data):
@@ -54,7 +86,7 @@ def build_ocr_items(data, page_number, page_size, start_id):
     text = _ocr_markdown(data, page_number, mode='auto')
     if not text.strip():
         text = _ocr_markdown(data, page_number, mode='force')
-    chunks = [line.strip() for line in text.split('\n') if line.strip()]
+    chunks = clean_markdown(text).split('\n')
     width, height = page_size
     return [
         dict(id=start_id + i, text=chunk, page=page_number, x=0.0, y=0.0,
