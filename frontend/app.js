@@ -310,7 +310,7 @@ function renderResults() {
     message.className = 'text-light';
     message.textContent = state.evaluating ? 'Evaluating selected pages...' : latest?.error
       ? `Evaluation failed: ${latest.error}` : latest?.skipped
-      ? 'This page has no embedded text. OCR is not enabled.' : state.batchSummary
+      ? 'This page has no readable text, even after OCR.' : state.batchSummary
       ? 'This page was not included in the evaluation. Change the page scope and run again.'
       : 'Review your questions, then select Run evaluation to see answers here.';
     pane.appendChild(message);

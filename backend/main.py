@@ -1,5 +1,6 @@
 import hashlib
 import io
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -12,8 +13,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from typesafe_sdk import Choice, TypeSafeClient
 
 from backend import store
-from backend.inspector import inspect_pdf, render_page
+from backend.inspector import build_ocr_items, inspect_pdf, render_page, unrotated_page_size
 from backend.schemas import EvaluateRequest, SampleRequest, UploadResponse
+
+logger = logging.getLogger(__name__)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / 'frontend'
 MAX_BYTES = 20 * 1024 * 1024
@@ -52,6 +55,19 @@ def _ingest(data: bytes) -> dict:
         result = inspect_pdf(data)
     except Exception as exc:
         raise HTTPException(400, f'Could not read this PDF: {exc}')
+    pages_with_text = {item['page'] for item in result['items']}
+    next_id = len(result['items']) + 1
+    for page_number in range(1, page_count + 1):
+        if page_number in pages_with_text:
+            continue
+        try:
+            page_size = unrotated_page_size(data, page_number - 1)
+            ocr_items = build_ocr_items(data, page_number, page_size, next_id)
+        except Exception as exc:
+            logger.warning('OCR failed for %s page %s: %s', document_id, page_number, exc)
+            continue
+        result['items'].extend(ocr_items)
+        next_id += len(ocr_items)
     store.put(document_id, data=data, items=result['items'], turns=result['turns'], page_count=page_count)
     return {'document_id': document_id, 'page_count': page_count}
 
@@ -131,7 +147,7 @@ def evaluate_page(document_id: str, page_number: int, body: EvaluateRequest):
     if not api_key:
         raise HTTPException(400, 'Enter your TypeSafe API key in Session access.')
     if not items:
-        raise HTTPException(400, 'This page has no embedded text to evaluate. OCR is not enabled.')
+        raise HTTPException(400, 'This page has no readable text, even after OCR.')
     if not questions:
         raise HTTPException(400, 'Add at least one question.')
     text = '\n'.join(i['text'] for i in items)
@@ -166,7 +182,7 @@ def evaluate_batch(document_id: str, body: EvaluateRequest):
     def process_page(client, p):
         page_items = items_by_page[p]
         if not page_items:
-            return p, {'skipped': True, 'reason': 'No embedded text'}
+            return p, {'skipped': True, 'reason': 'No readable text, even after OCR'}
         render_started = perf_counter()
         with store.render_lock:
             render_page(document['data'], p - 1, page_items, document['turns'].get(p), True, None, 1.5)

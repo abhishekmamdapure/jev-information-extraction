@@ -4,6 +4,8 @@ import pdf_inspector
 import pypdfium2 as pdfium
 from PIL import ImageDraw
 
+from backend.ocr_runtime import ensure_ocr_runtime
+
 FIELDS = ('text', 'page', 'x', 'y', 'width', 'height', 'font', 'font_size',
           'rotation', 'advance_known', 'is_bold', 'is_italic', 'item_type')
 
@@ -15,6 +17,51 @@ def inspect_pdf(data):
              if item.item_type.lower() == 'text' and item.text.strip()]
     turns = {r.page: r.rotation for r in positioned.page_rotations}
     return {'items': items, 'turns': turns}
+
+
+def _ocr_markdown(data, page_number, mode):
+    result = pdf_inspector.process_pdf_with_ocr_bytes(data, mode=mode, page_numbers=[page_number])
+    for page in result.pages:
+        if page.page_number == page_number:
+            return page.markdown or ''
+    return ''
+
+
+def unrotated_page_size(data, page_index):
+    """A page's width/height in the unrotated frame ``display_box`` expects."""
+    with pdfium.PdfDocument(data) as doc:
+        page = doc[page_index]
+        try:
+            rotation = page.get_rotation()
+            page.set_rotation(0)
+            return page.get_size()
+        finally:
+            page.set_rotation(rotation)
+            page.close()
+
+
+def build_ocr_items(data, page_number, page_size, start_id):
+    """Items for a page that native extraction found no text on.
+
+    Tries the selective ``auto`` OCR mode first; if that still yields no
+    usable text, forces OCR on the page, matching try.py's demonstrated
+    fallback. pdf_inspector's OCR mode returns markdown, not per-line
+    positions, so the text is split on newlines into separate chunks -- each
+    its own evaluation candidate -- and every chunk shares one box spanning
+    the full (unrotated) page, since that's the only position OCR gives us.
+    """
+    ensure_ocr_runtime()
+    text = _ocr_markdown(data, page_number, mode='auto')
+    if not text.strip():
+        text = _ocr_markdown(data, page_number, mode='force')
+    chunks = [line.strip() for line in text.split('\n') if line.strip()]
+    width, height = page_size
+    return [
+        dict(id=start_id + i, text=chunk, page=page_number, x=0.0, y=0.0,
+             width=width, height=height, font='', font_size=0.0, rotation=0.0,
+             advance_known=True, is_bold=False, is_italic=False, item_type='text')
+        for i, chunk in enumerate(chunks)
+    ]
 
 
 def display_box(item, width, height, rotation=0, turn=None):
