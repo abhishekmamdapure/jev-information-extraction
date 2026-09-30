@@ -1,4 +1,2 @@
-What is the gst number ? 
+What is the GSTIN number ?
 What is the Total Invoice Amount ?
-What is the name of the seller ? 
-What is the name of the buyer ? 

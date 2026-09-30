@@ -138,6 +138,10 @@ body {
 .workspace {
   min-width: 0;
 }
+/* Oat pads every <main>; line the workspace up with the sidebar instead. */
+.workspace {
+  padding-block-start: 0;
+}
 .settings {
   display: grid;
   gap: 1rem;
