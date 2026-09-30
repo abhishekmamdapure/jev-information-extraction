@@ -7,6 +7,7 @@ const state = {
   pageItems: [],
   pageText: '',
   model: 'jev',     // 'jev' (TypeSafe, needs API key) or 'atom' (public ATOM endpoint)
+  mode: 'extraction', // 'extraction' (match text chunks) or 'classification' (pick one of the choices)
   threshold: 0.9,
   scale: 2,
   showBoxes: true,
@@ -243,11 +244,17 @@ qs('prev-page').addEventListener('click', () => loadPage(state.pageNumber - 1));
 qs('next-page').addEventListener('click', () => loadPage(state.pageNumber + 1));
 
 function currentQuestions() {
+  if (state.mode === 'classification') return [qs('class-question').value.trim()].filter(Boolean);
   return parseQuestions(qs('questions').value);
 }
 
+function currentChoices() {
+  if (state.mode !== 'classification') return [];
+  return qs('class-choices').value.split('\n').map((c) => c.trim()).filter(Boolean);
+}
+
 function visibleItemIds() {
-  if (!state.showBoxes) return [];
+  if (!state.showBoxes || state.mode === 'classification') return [];
   const latest = state.pageResults[state.pageNumber];
   if (!latest || !latest.answers) return [];
   const visible = [];
@@ -301,9 +308,37 @@ function appendMatch(container, match) {
   }
 }
 
+// The exact request the backend sent for a page, as a copy-pasteable bash curl command.
+function curlCommand(request) {
+  const body = JSON.stringify(request.body, null, 2).replace(/'/g, `'\\''`);
+  const auth = request.body.model ? `  -H "Authorization: Bearer $TYPESAFE_API_KEY" \\\n` : '';
+  return `curl -X POST '${request.url}' \\\n  -H 'Content-Type: application/json' \\\n${auth}  -d '${body}'`;
+}
+
+function updateCurlButton(latest) {
+  const button = qs('show-curl');
+  button.hidden = state.mode !== 'classification';
+  button.disabled = !latest?.request;
+  if (!latest?.request) return;
+  qs('curl-output').textContent = curlCommand(latest.request);
+  qs('curl-description').textContent = `Page ${state.pageNumber} · ${state.model === 'atom' ? 'AT0M' : 'Jev'}`
+    + (latest.request.body.model ? ' · export TYPESAFE_API_KEY before running.' : ' · no API key needed.');
+}
+
+qs('copy-curl').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(qs('curl-output').textContent);
+    qs('copy-curl').textContent = 'Copied';
+    setTimeout(() => { qs('copy-curl').textContent = 'Copy'; }, 1500);
+  } catch (error) {
+    qs('copy-curl').textContent = 'Copy failed';
+  }
+});
+
 function renderResults() {
   const pane = qs('results-pane');
   const latest = state.pageResults[state.pageNumber];
+  updateCurlButton(latest);
   pane.innerHTML = '';
   const questions = currentQuestions();
   if (!latest || !latest.answers) {
@@ -315,6 +350,22 @@ function renderResults() {
       ? 'This page was not included in the evaluation. Change the page scope and run again.'
       : 'Review your questions, then select Run evaluation to see answers here.';
     pane.appendChild(message);
+    return;
+  }
+  if (state.mode === 'classification') {
+    const card = document.createElement('article');
+    card.className = 'result-card';
+    const heading = document.createElement('h3');
+    heading.textContent = questions[0] || '';
+    card.appendChild(heading);
+    const probabilities = latest.answers.q1?.probabilities || {};
+    const keys = latest.choice_keys || [];
+    currentChoices()
+      .map((line, index) => ({ item: { text: line.split(':')[0].trim() }, probability: probabilities[keys[index]] ?? null }))
+      .filter(({ probability }) => Number.isFinite(probability))
+      .sort((a, b) => b.probability - a.probability)
+      .forEach((match) => appendMatch(card, match));
+    pane.appendChild(card);
     return;
   }
   questions.forEach((question, index) => {
@@ -378,7 +429,8 @@ async function renderPreview() {
   if (latest && latest.render_seconds !== undefined) timingParts.push(`Render: ${latest.render_seconds.toFixed(3)}s`);
   if (latest && latest.eval_seconds !== undefined) timingParts.push(`Evaluation: ${latest.eval_seconds.toFixed(3)}s`);
   qs('page-timing').textContent = timingParts.length ? `Page ${state.pageNumber} · ${timingParts.join(' · ')}` : '';
-  qs('preview-meta').textContent = `${visible.length} of ${state.pageItems.length} chunks highlighted`;
+  qs('preview-meta').textContent = state.mode === 'classification'
+    ? '' : `${visible.length} of ${state.pageItems.length} chunks highlighted`;
 }
 
 function applyPreviewZoom() {
@@ -437,6 +489,11 @@ function updateEvaluateButtonState() {
     hint.textContent = 'Add at least one question to enable evaluation.';
     return;
   }
+  if (state.mode === 'classification' && currentChoices().length < 2) {
+    button.disabled = true;
+    hint.textContent = 'Add at least two choices to enable classification.';
+    return;
+  }
   if (state.model === 'jev' && !qs('api-key').value.trim()) {
     button.disabled = true;
     hint.textContent = 'Add your API key using the button in the header to evaluate.';
@@ -473,7 +530,8 @@ async function runBatchEvaluate() {
   renderResults();
   renderBatchSummary();
   updateEvaluateButtonState();
-  qs('questions').disabled = true;
+  const inputs = ['questions', 'class-question', 'class-choices'].map(qs);
+  inputs.forEach((el) => { el.disabled = true; });
   qs('page-scope').disabled = true;
   qs('page-limit').disabled = true;
   qs('replace-pdf').disabled = true;
@@ -485,7 +543,9 @@ async function runBatchEvaluate() {
     await renderPreview();
     const response = await apiFetch(`/api/documents/${docAtRequest}/evaluate-batch`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ questions, api_key: apiKey, page_limit: pageLimit, model: state.model }),
+      body: JSON.stringify({
+        questions, choices: currentChoices(), api_key: apiKey, page_limit: pageLimit, model: state.model,
+      }),
     });
     const body = await response.json();
     if (!response.ok) {
@@ -504,7 +564,7 @@ async function runBatchEvaluate() {
   } finally {
     progress.hidden = true;
     state.evaluating = false;
-    qs('questions').disabled = false;
+    inputs.forEach((el) => { el.disabled = false; });
     qs('page-scope').disabled = false;
     qs('page-limit').disabled = false;
     qs('replace-pdf').disabled = false;
@@ -517,31 +577,46 @@ async function runBatchEvaluate() {
 qs('model-select').addEventListener('change', (event) => {
   state.model = event.target.value;
   const isAtom = state.model === 'atom';
-  qs('model-name').textContent = isAtom ? 'ATOM' : 'Jev';
+  qs('model-name').textContent = isAtom ? 'AT0M' : 'Jev';
   qs('session-menu').hidden = isAtom; // ATOM needs no API key
-  qs('send-hint').textContent = `Evaluation sends text from the selected pages to ${isAtom ? 'ATOM (at0m.pienomial.com)' : 'TypeSafe'}.`;
-  state.pageResults = {};
-  state.batchSummary = null;
-  qs('batch-summary').hidden = true;
-  updateEvaluateButtonState();
-  if (state.documentId) {
-    renderResults();
-    renderPreview();
-  }
+  qs('send-hint').textContent = `Evaluation sends text from the selected pages to ${isAtom ? 'AT0M (at0m.pienomial.com)' : 'TypeSafe'}.`;
+  clearResults();
 });
 
-qs('questions').addEventListener('input', () => {
-  updateEvaluateButtonState();
-});
-qs('questions').addEventListener('change', () => {
+function clearResults() {
   state.pageResults = {};
   state.batchSummary = null;
   qs('batch-summary').hidden = true;
+  updateEvaluateButtonState();
   if (state.documentId) {
     renderResults();
     renderPreview();
   }
-});
+}
+
+for (const id of ['questions', 'class-question', 'class-choices']) {
+  qs(id).addEventListener('input', updateEvaluateButtonState);
+  qs(id).addEventListener('change', clearResults);
+}
+
+function applyMode() {
+  state.mode = location.hash === '#classification' ? 'classification' : 'extraction';
+  const classify = state.mode === 'classification';
+  for (const link of document.querySelectorAll('.mode-nav a')) {
+    if (link.getAttribute('href') === `#${state.mode}`) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
+  qs('extraction-fields').hidden = classify;
+  qs('classification-fields').hidden = !classify;
+  qs('step-two-title').textContent = classify ? 'Classify each page' : 'Ask your questions';
+  qs('results-title').textContent = classify ? 'Classification' : 'Questions & answers';
+  qs('show-boxes').closest('label').hidden = classify; // no chunk boxes to show when classifying
+  qs('show-curl').hidden = !classify;
+  document.querySelector('[data-sidebar-layout]').removeAttribute('data-sidebar-open'); // close on mobile
+  clearResults();
+}
+window.addEventListener('hashchange', applyMode);
+applyMode();
 
 function selectedPageLimit() {
   return qs('page-scope').value === 'first' ? Number(qs('page-limit').value) : null;

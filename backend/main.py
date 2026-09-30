@@ -2,6 +2,7 @@ import hashlib
 import io
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from time import perf_counter
@@ -11,7 +12,7 @@ import pypdfium2 as pdfium
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from typesafe_sdk import Choice, TypeSafeClient
+from typesafe_sdk import TypeSafeClient
 
 from backend import store
 from backend.inspector import build_ocr_items, inspect_pdf, render_page, unrotated_page_size
@@ -24,6 +25,7 @@ MAX_BYTES = 20 * 1024 * 1024
 SAMPLE_DIR = Path(__file__).resolve().parent.parent / 'sample_pdf'
 SAMPLE_QUESTIONS_FILE = Path(__file__).resolve().parent.parent / 'sample_questions.txt'
 ATOM_URL = 'https://at0m.pienomial.com/decide/v0'
+JEV_URL = 'https://api.typesafe.ai/v1/systemone'  # where TypeSafeClient.system_one posts
 
 app = FastAPI(title='PDF Inspector API')
 allowed_origins = [origin.strip() for origin in os.environ.get('FRONTEND_ORIGINS', '').split(',') if origin.strip()]
@@ -59,18 +61,20 @@ def _ingest(data: bytes) -> dict:
         raise HTTPException(400, f'Could not read this PDF: {exc}')
     pages_with_text = {item['page'] for item in result['items']}
     next_id = len(result['items']) + 1
+    raw_ocr = {}  # page -> OCR markdown before cleaning; classification reads it as-is
     for page_number in range(1, page_count + 1):
         if page_number in pages_with_text:
             continue
         try:
             page_size = unrotated_page_size(data, page_number - 1)
-            ocr_items = build_ocr_items(data, page_number, page_size, next_id)
+            raw_ocr[page_number], ocr_items = build_ocr_items(data, page_number, page_size, next_id)
         except Exception as exc:
             logger.warning('OCR failed for %s page %s: %s', document_id, page_number, exc)
             continue
         result['items'].extend(ocr_items)
         next_id += len(ocr_items)
-    store.put(document_id, data=data, items=result['items'], turns=result['turns'], page_count=page_count)
+    store.put(document_id, data=data, items=result['items'], turns=result['turns'], page_count=page_count,
+              raw_ocr=raw_ocr)
     return {'document_id': document_id, 'page_count': page_count}
 
 
@@ -130,12 +134,6 @@ def render_page_endpoint(document_id: str, page_number: int, scale: float = 1.5,
                      headers={'X-Image-Width': str(image.width), 'X-Image-Height': str(image.height)})
 
 
-def _build_questions(items: list, questions: list) -> dict:
-    return {f'q{index}': Choice(instructions=question,
-                                 criteria={str(i): item['text'] for i, item in enumerate(items)})
-            for index, question in enumerate(questions, 1)}
-
-
 def _resolve_api_key(raw_key: str) -> str:
     return raw_key.strip()
 
@@ -145,25 +143,59 @@ def _open_client(model: str, api_key: str):
     return httpx.Client(timeout=60) if model == 'atom' else TypeSafeClient(api_key=api_key)
 
 
-def _decide(client, model: str, items: list, questions: list) -> dict:
-    text = '\n'.join(i['text'] for i in items)
+def _choice_criteria(raw_choices: list) -> dict:
+    """'Laptop: laptops and notebooks' -> {'laptop': 'laptops and notebooks'}, as in ATOM's docs.
+
+    A line without a description uses its name as the description. Empty => {} (extraction mode).
+    """
+    criteria = {}
+    lines = [c.strip() for c in raw_choices if c.strip()]
+    for line in lines:
+        name, _, description = line.partition(':')
+        key = re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
+        if not key or key in criteria:
+            raise HTTPException(400, f'Choice names must be unique and contain letters or numbers: "{line}".')
+        criteria[key] = description.strip() or name.strip()
+    if raw_choices and len(criteria) < 2:
+        raise HTTPException(400, 'Add at least two choices.')
+    return criteria
+
+
+def _decide(client, model: str, items: list, questions: list, choice_criteria: dict | None = None,
+            state: str | None = None) -> dict:
+    text = state or '\n'.join(i['text'] for i in items)
+    # Extraction: each extracted item is one option. Classification: the user's named choices are.
+    criteria = choice_criteria or {str(i): item['text'] for i, item in enumerate(items)}
+    payload = {'state': text, 'questions': {
+        f'q{index}': {'type': 'choice', 'instructions': question, 'criteria': criteria}
+        for index, question in enumerate(questions, 1)}}
+    # Classification: the UI pairs these keys, in order, with the choice lines it sent.
+    extra = {'choice_keys': list(choice_criteria)} if choice_criteria else {}
     if model == 'atom':
-        # Each extracted item is one choice option; ATOM returns a probability per option.
-        criteria = {str(i): item['text'] for i, item in enumerate(items)}
-        payload = {'state': text, 'questions': {
-            f'q{index}': {'type': 'choice', 'instructions': question, 'criteria': criteria}
-            for index, question in enumerate(questions, 1)}}
         response = client.post(ATOM_URL, json=payload)
         response.raise_for_status()
         answers = response.json()['answers']
         return {'answers': {name: {'probabilities': a['probs']} for name, a in answers.items()},
-                'usage': None, 'model': 'at0m-v0'}
-    response = client.system_one(state=text, questions=_build_questions(items, questions), model='jev-latest')
+                'usage': None, 'model': 'at0m-v0', 'request': {'url': ATOM_URL, 'body': payload}, **extra}
+    # The SDK sends this same body plus "model" (checked against typesafe-sdk 0.7.0's prepare_system_one).
+    response = client.system_one(state=text, questions=payload['questions'], model='jev-latest')
     return {
         'answers': {name: {'probabilities': a.probabilities} for name, a in response.answers.items()},
         'usage': {'input_tokens': response.usage.input_tokens, 'output_tokens': response.usage.output_tokens},
         'model': response.model,
+        'request': {'url': JEV_URL, 'body': {'state': text, 'model': 'jev-latest', 'questions': payload['questions']}},
+        **extra,
     }
+
+
+def _classify_state(document: dict, page_number: int, choices: dict) -> str | None:
+    # Classification reads OCR pages as extracted (not Markdown-cleaned) and flattens every page
+    # to one line; extraction keeps the cleaned, line-separated chunks.
+    if not choices:
+        return None
+    text = document['raw_ocr'].get(page_number) or '\n'.join(
+        i['text'] for i in document['items'] if i['page'] == page_number)
+    return text.replace('\n', ' ')
 
 
 @app.post('/api/documents/{document_id}/pages/{page_number}/evaluate')
@@ -171,6 +203,7 @@ def evaluate_page(document_id: str, page_number: int, body: EvaluateRequest):
     document = _get_document(document_id)
     items = _page_items(document, page_number)
     questions = [q.strip() for q in body.questions if q.strip()]
+    choices = _choice_criteria(body.choices)
     api_key = _resolve_api_key(body.api_key)
     if body.model == 'jev' and not api_key:
         raise HTTPException(400, 'Enter your TypeSafe API key in Session access.')
@@ -181,7 +214,8 @@ def evaluate_page(document_id: str, page_number: int, body: EvaluateRequest):
     started = perf_counter()
     try:
         with _open_client(body.model, api_key) as client:
-            result = _decide(client, body.model, items, questions)
+            result = _decide(client, body.model, items, questions, choices,
+                             _classify_state(document, page_number, choices))
     except Exception as exc:
         detail = str(exc).replace(api_key, '[redacted]') if api_key else str(exc)
         raise HTTPException(502, f'Evaluation failed ({type(exc).__name__}): {detail or "Unknown SDK error."}')
@@ -192,6 +226,7 @@ def evaluate_page(document_id: str, page_number: int, body: EvaluateRequest):
 def evaluate_batch(document_id: str, body: EvaluateRequest):
     document = _get_document(document_id)
     questions = [q.strip() for q in body.questions if q.strip()]
+    choices = _choice_criteria(body.choices)
     api_key = _resolve_api_key(body.api_key)
     if body.model == 'jev' and not api_key:
         raise HTTPException(400, 'Enter your TypeSafe API key in Session access.')
@@ -211,7 +246,8 @@ def evaluate_batch(document_id: str, body: EvaluateRequest):
         render_seconds = perf_counter() - render_started
         try:
             eval_started = perf_counter()
-            result = _decide(client, body.model, page_items, questions)
+            result = _decide(client, body.model, page_items, questions, choices,
+                             _classify_state(document, p, choices))
             return p, {**result, 'eval_seconds': perf_counter() - eval_started, 'render_seconds': render_seconds}
         except Exception as exc:
             detail = str(exc).replace(api_key, '[redacted]') if api_key else str(exc)
