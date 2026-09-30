@@ -12,7 +12,11 @@
 <body style="color-scheme: light">
   <a class="skip-link" href="#main-content">Skip to content</a>
 
+  <div data-sidebar-layout>
   <header class="app-header">
+    <button type="button" class="outline small" data-sidebar-toggle aria-label="Toggle navigation">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
     <div class="app-header-titles">
       <h1>Parse the data you need with <span id="model-name">Jev</span></h1>
       <p class="app-subtitle">PDF parsing demo &middot; Ask questions. Find the matching data.</p>
@@ -21,7 +25,7 @@
     <label class="model-switch" for="model-select">Model
       <select id="model-select" autocomplete="off">
         <option value="jev" selected>Jev</option>
-        <option value="atom">ATOM</option>
+        <option value="atom">AT0M</option>
       </select>
     </label>
     <ot-dropdown class="session-menu" id="session-menu">
@@ -56,7 +60,16 @@
     </div>
   </header>
 
-  <div class="app-layout">
+  <aside data-sidebar class="mode-nav">
+    <nav aria-label="Mode">
+      <ul>
+        <li><a href="#extraction" aria-current="page">Extraction</a></li>
+        <li><a href="#classification">Classification</a></li>
+      </ul>
+    </nav>
+  </aside>
+
+  <main class="app-layout" id="main-content">
     <aside class="settings" id="sidebar">
       <section class="card panel-body">
         <h2 class="section-title"><span class="step-number">1</span> Add a document</h2>
@@ -109,8 +122,23 @@
       </section>
 
       <section class="panel-body evaluation-settings">
-        <h2 class="section-title"><span class="step-number">2</span> Ask your questions</h2>
+        <h2 class="section-title"><span class="step-number">2</span> <span id="step-two-title">Ask your questions</span></h2>
+        <div class="field-stack" id="classification-fields" hidden>
+          <label data-field for="class-question">
+            Question
+            <input type="text" id="class-question" value="What category best fits to the items in this invoice?">
+          </label>
+          <label data-field for="class-choices">
+            Choices
+            <textarea id="class-choices" rows="4" aria-describedby="class-choices-hint">Laptop: laptops and notebook computers
+Mobile: mobile phones and smartphones
+Headphones: headphones, earphones and earbuds
+Hard Drives: hard drives, SSDs and external storage</textarea>
+          </label>
+          <small data-hint id="class-choices-hint">One per line as Name: description (description optional), at least two. Each page is classified separately.</small>
+        </div>
         <div class="field-stack">
+          <div class="field-stack" id="extraction-fields">
           <label data-field for="questions">
             Questions
             <textarea id="questions" rows="4" aria-describedby="questions-hint"></textarea>
@@ -121,7 +149,7 @@
             Minimum chunk probability
             <input type="number" id="threshold" min="0" max="1" step="0.01" value="0.9" required>
           </label>
-
+          </div>
 
           <button type="button" id="evaluate-button" class="full-width" disabled>Run evaluation</button>
           <small data-hint role="status" id="evaluate-hint">Upload a document to enable evaluation.</small>
@@ -130,7 +158,7 @@
       </section>
     </aside>
 
-    <main class="workspace" id="main-content">
+    <div class="workspace">
       <div class="empty-state-wrap" id="empty-state">
         <div class="empty-state-card">
           <svg class="empty-document-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
@@ -148,7 +176,13 @@
 
         <div class="inspection-grid">
           <section class="card panel-body eval-results" id="eval-results-section">
-            <h2 class="section-title">Questions &amp; answers</h2>
+            <header class="results-header">
+              <h2 class="section-title" id="results-title">Questions &amp; answers</h2>
+              <button type="button" class="outline small" id="show-curl" commandfor="curl-dialog" command="show-modal"
+                      aria-label="Show curl command for this page" title="Show curl command for this page" hidden disabled>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1"/><path d="M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/></svg>
+              </button>
+            </header>
             <p id="batch-summary" class="evaluation-time" hidden><span id="summary-caption"></span></p>
             <p id="page-timing" class="evaluation-time"></p>
             <small class="probability-legend">Match probability: high 80%+ / medium 50% to under 80% / low below 50%.</small>
@@ -186,12 +220,28 @@
 
         <button type="button" class="ghost small" id="open-text">View extracted text</button>
       </div>
-    </main>
+    </div>
+  </main>
   </div>
   <dialog id="answer-dialog" aria-labelledby="answer-title">
     <h2 id="answer-title">Full match</h2>
     <p id="full-answer"></p>
     <form method="dialog"><button class="outline">Close</button></form>
+  </dialog>
+  <dialog id="curl-dialog" closedby="any" aria-labelledby="curl-title">
+    <form method="dialog">
+      <header>
+        <h3 id="curl-title">curl request</h3>
+        <p id="curl-description"></p>
+      </header>
+      <div>
+        <pre class="curl-output"><code id="curl-output"></code></pre>
+      </div>
+      <footer>
+        <button type="button" commandfor="curl-dialog" command="close" class="outline">Close</button>
+        <button type="button" id="copy-curl">Copy</button>
+      </footer>
+    </form>
   </dialog>
   <dialog id="text-dialog" aria-labelledby="text-title">
     <header class="text-dialog-header">

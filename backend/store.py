@@ -12,10 +12,11 @@ _documents = {}
 _store_lock = threading.Lock()
 
 
-def put(document_id, data, items, turns, page_count):
+def put(document_id, data, items, turns, page_count, raw_ocr=None):
     with _store_lock:
         _documents[document_id] = {
             'data': data, 'items': items, 'turns': turns, 'page_count': page_count,
+            'raw_ocr': raw_ocr or {},
         }
 
 

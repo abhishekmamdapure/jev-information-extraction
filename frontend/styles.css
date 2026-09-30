@@ -31,8 +31,39 @@ body {
   top: 1rem;
 }
 
+/* Mode sidebar (Oat sidebar layout); the app header spans the top row. */
+[data-sidebar-layout] {
+  --sidebar-width: 11rem;
+}
+.mode-nav nav {
+  padding: 0.75rem 0.5rem;
+}
+.mode-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+.mode-nav a {
+  display: block;
+  min-height: 44px;
+  padding: 0.625rem 0.75rem;
+  border-radius: 6px;
+  color: var(--foreground);
+  text-decoration: none;
+}
+.mode-nav a:hover {
+  background: var(--muted);
+}
+.mode-nav a[aria-current="page"] {
+  background: var(--muted);
+  font-weight: 600;
+}
+
 /* Header */
 .app-header {
+  grid-column: 1 / -1;
   min-height: 64px;
   padding: 0.75rem 1.5rem;
   border-bottom: 1px solid var(--border);
@@ -454,12 +485,14 @@ ot-upload {
 }
 #text-dialog .text-output { max-height: 60dvh; margin: 0.75rem 0; }
 #open-text { justify-self: start; }
+.results-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; }
+#show-curl { min-width: 36px; min-height: 36px; cursor: pointer; }
+#curl-dialog { width: min(48rem, 90vw); }
+.curl-output { max-height: 60dvh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.8125rem; margin: 0; }
 @media (min-width: 1000px) and (min-height: 720px) {
-  body { height: 100dvh; display: flex; flex-direction: column; }
-  .app-header { flex: 0 0 auto; padding: 0.5rem 1rem; }
+  .app-header { padding: 0.5rem 1rem; }
   .app-header-titles h1 { font-size: 1.25rem; }
   .app-layout {
-    flex: 1;
     min-height: 0;
     grid-template-columns: 17rem minmax(0, 1fr);
     gap: 0.75rem;
@@ -472,6 +505,7 @@ ot-upload {
   .settings .field-stack { gap: 0.375rem; }
   .settings [data-field] { margin: 0; }
   .settings textarea { min-height: 5rem; height: 5rem; resize: none; }
+  .settings #class-choices { height: 6.75rem; }
   .settings small { font-size: 0.6875rem; }
   .settings details { padding: 0.375rem; }
   .page-scope { margin-bottom: 0.5rem; }

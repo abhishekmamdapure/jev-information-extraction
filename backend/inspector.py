@@ -81,6 +81,7 @@ def build_ocr_items(data, page_number, page_size, start_id):
     positions, so the text is split on newlines into separate chunks -- each
     its own evaluation candidate -- and every chunk shares one box spanning
     the full (unrotated) page, since that's the only position OCR gives us.
+    Also returns the raw OCR markdown, which classification uses as-is.
     """
     ensure_ocr_runtime()
     text = _ocr_markdown(data, page_number, mode='auto')
@@ -88,7 +89,7 @@ def build_ocr_items(data, page_number, page_size, start_id):
         text = _ocr_markdown(data, page_number, mode='force')
     chunks = clean_markdown(text).split('\n')
     width, height = page_size
-    return [
+    return text, [
         dict(id=start_id + i, text=chunk, page=page_number, x=0.0, y=0.0,
              width=width, height=height, font='', font_size=0.0, rotation=0.0,
              advance_known=True, is_bold=False, is_italic=False, item_type='text')
