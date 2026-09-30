@@ -60,3 +60,20 @@ def test_evaluate_page_redacts_key_from_error():
                                 json={'questions': ['Q?'], 'api_key': 'secret-key'})
     assert response.status_code == 502
     assert 'secret-key' not in response.json()['detail']
+
+
+def test_evaluate_page_atom_sends_items_as_choice_without_key():
+    _seed_document()
+    with patch('backend.main.httpx.Client') as factory:
+        http = factory.return_value.__enter__.return_value
+        http.post.return_value.json.return_value = {
+            'answers': {'q1': {'type': 'choice', 'probs': {'0': 0.1, '1': 0.9}, 'choice': '1'}}, 'ms': 5.0}
+        response = client.post('/api/documents/doc-eval/pages/1/evaluate',
+                                json={'questions': ['What is the total?'], 'model': 'atom'})
+    assert response.status_code == 200
+    body = response.json()
+    assert body['answers']['q1']['probabilities'] == {'0': 0.1, '1': 0.9}
+    assert body['model'] == 'at0m-v0'
+    question = http.post.call_args.kwargs['json']['questions']['q1']
+    assert question == {'type': 'choice', 'instructions': 'What is the total?',
+                        'criteria': {'0': 'Repeated', '1': 'Total 100'}}

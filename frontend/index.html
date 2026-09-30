@@ -14,10 +14,17 @@
 
   <header class="app-header">
     <div class="app-header-titles">
-      <h1>Parse the data you need with Jev</h1>
+      <h1>Parse the data you need with <span id="model-name">Jev</span></h1>
       <p class="app-subtitle">PDF parsing demo &middot; Ask questions. Find the matching data.</p>
     </div>
-    <ot-dropdown class="session-menu">
+    <div class="header-actions">
+    <label class="model-switch" for="model-select">Model
+      <select id="model-select" autocomplete="off">
+        <option value="jev" selected>Jev</option>
+        <option value="atom">ATOM</option>
+      </select>
+    </label>
+    <ot-dropdown class="session-menu" id="session-menu">
       <button type="button" class="outline" id="session-trigger" popovertarget="session-access">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg>
         API key <span class="key-status" id="key-trigger-status">Not set</span>
@@ -46,6 +53,7 @@
       </div>
       </section>
     </ot-dropdown>
+    </div>
   </header>
 
   <div class="app-layout">
@@ -117,7 +125,7 @@
 
           <button type="button" id="evaluate-button" class="full-width" disabled>Run evaluation</button>
           <small data-hint role="status" id="evaluate-hint">Upload a document to enable evaluation.</small>
-          <small data-hint>Evaluation sends text from the selected pages to TypeSafe.</small>
+          <small data-hint id="send-hint">Evaluation sends text from the selected pages to TypeSafe.</small>
         </div>
       </section>
     </aside>

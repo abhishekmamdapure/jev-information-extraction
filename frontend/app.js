@@ -6,6 +6,7 @@ const state = {
   pageNumber: 1,
   pageItems: [],
   pageText: '',
+  model: 'jev',     // 'jev' (TypeSafe, needs API key) or 'atom' (public ATOM endpoint)
   threshold: 0.9,
   scale: 2,
   showBoxes: true,
@@ -436,7 +437,7 @@ function updateEvaluateButtonState() {
     hint.textContent = 'Add at least one question to enable evaluation.';
     return;
   }
-  if (!qs('api-key').value.trim()) {
+  if (state.model === 'jev' && !qs('api-key').value.trim()) {
     button.disabled = true;
     hint.textContent = 'Add your API key using the button in the header to evaluate.';
     return;
@@ -460,7 +461,7 @@ function renderBatchSummary() {
 async function runBatchEvaluate() {
   const questions = currentQuestions();
   const apiKey = qs('api-key').value.trim();
-  if (!apiKey || !state.documentId || state.evaluating) return;
+  if ((state.model === 'jev' && !apiKey) || !state.documentId || state.evaluating) return;
   if (qs('page-scope').value === 'first' && !qs('page-limit').reportValidity()) return;
   const docAtRequest = state.documentId;
   if (!questions.length) return; // batch needs questions loaded; silently no-ops otherwise
@@ -484,7 +485,7 @@ async function runBatchEvaluate() {
     await renderPreview();
     const response = await apiFetch(`/api/documents/${docAtRequest}/evaluate-batch`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ questions, api_key: apiKey, page_limit: pageLimit }),
+      body: JSON.stringify({ questions, api_key: apiKey, page_limit: pageLimit, model: state.model }),
     });
     const body = await response.json();
     if (!response.ok) {
@@ -512,6 +513,22 @@ async function runBatchEvaluate() {
     renderResults();
   }
 }
+
+qs('model-select').addEventListener('change', (event) => {
+  state.model = event.target.value;
+  const isAtom = state.model === 'atom';
+  qs('model-name').textContent = isAtom ? 'ATOM' : 'Jev';
+  qs('session-menu').hidden = isAtom; // ATOM needs no API key
+  qs('send-hint').textContent = `Evaluation sends text from the selected pages to ${isAtom ? 'ATOM (at0m.pienomial.com)' : 'TypeSafe'}.`;
+  state.pageResults = {};
+  state.batchSummary = null;
+  qs('batch-summary').hidden = true;
+  updateEvaluateButtonState();
+  if (state.documentId) {
+    renderResults();
+    renderPreview();
+  }
+});
 
 qs('questions').addEventListener('input', () => {
   updateEvaluateButtonState();

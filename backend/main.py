@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from time import perf_counter
 
+import httpx
 import pypdfium2 as pdfium
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,7 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / 'frontend'
 MAX_BYTES = 20 * 1024 * 1024
 SAMPLE_DIR = Path(__file__).resolve().parent.parent / 'sample_pdf'
 SAMPLE_QUESTIONS_FILE = Path(__file__).resolve().parent.parent / 'sample_questions.txt'
+ATOM_URL = 'https://at0m.pienomial.com/decide/v0'
 
 app = FastAPI(title='PDF Inspector API')
 allowed_origins = [origin.strip() for origin in os.environ.get('FRONTEND_ORIGINS', '').split(',') if origin.strip()]
@@ -138,32 +140,52 @@ def _resolve_api_key(raw_key: str) -> str:
     return raw_key.strip()
 
 
+def _open_client(model: str, api_key: str):
+    # ATOM is a public endpoint and needs no key; Jev goes through the TypeSafe SDK.
+    return httpx.Client(timeout=60) if model == 'atom' else TypeSafeClient(api_key=api_key)
+
+
+def _decide(client, model: str, items: list, questions: list) -> dict:
+    text = '\n'.join(i['text'] for i in items)
+    if model == 'atom':
+        # Each extracted item is one choice option; ATOM returns a probability per option.
+        criteria = {str(i): item['text'] for i, item in enumerate(items)}
+        payload = {'state': text, 'questions': {
+            f'q{index}': {'type': 'choice', 'instructions': question, 'criteria': criteria}
+            for index, question in enumerate(questions, 1)}}
+        response = client.post(ATOM_URL, json=payload)
+        response.raise_for_status()
+        answers = response.json()['answers']
+        return {'answers': {name: {'probabilities': a['probs']} for name, a in answers.items()},
+                'usage': None, 'model': 'at0m-v0'}
+    response = client.system_one(state=text, questions=_build_questions(items, questions), model='jev-latest')
+    return {
+        'answers': {name: {'probabilities': a.probabilities} for name, a in response.answers.items()},
+        'usage': {'input_tokens': response.usage.input_tokens, 'output_tokens': response.usage.output_tokens},
+        'model': response.model,
+    }
+
+
 @app.post('/api/documents/{document_id}/pages/{page_number}/evaluate')
 def evaluate_page(document_id: str, page_number: int, body: EvaluateRequest):
     document = _get_document(document_id)
     items = _page_items(document, page_number)
     questions = [q.strip() for q in body.questions if q.strip()]
     api_key = _resolve_api_key(body.api_key)
-    if not api_key:
+    if body.model == 'jev' and not api_key:
         raise HTTPException(400, 'Enter your TypeSafe API key in Session access.')
     if not items:
         raise HTTPException(400, 'This page has no readable text, even after OCR.')
     if not questions:
         raise HTTPException(400, 'Add at least one question.')
-    text = '\n'.join(i['text'] for i in items)
     started = perf_counter()
     try:
-        with TypeSafeClient(api_key=api_key) as client:
-            response = client.system_one(state=text, questions=_build_questions(items, questions), model='jev-latest')
+        with _open_client(body.model, api_key) as client:
+            result = _decide(client, body.model, items, questions)
     except Exception as exc:
         detail = str(exc).replace(api_key, '[redacted]') if api_key else str(exc)
         raise HTTPException(502, f'Evaluation failed ({type(exc).__name__}): {detail or "Unknown SDK error."}')
-    return {
-        'answers': {name: {'probabilities': answer.probabilities} for name, answer in response.answers.items()},
-        'usage': {'input_tokens': response.usage.input_tokens, 'output_tokens': response.usage.output_tokens},
-        'model': response.model,
-        'eval_seconds': perf_counter() - started,
-    }
+    return {**result, 'eval_seconds': perf_counter() - started}
 
 
 @app.post('/api/documents/{document_id}/evaluate-batch')
@@ -171,7 +193,7 @@ def evaluate_batch(document_id: str, body: EvaluateRequest):
     document = _get_document(document_id)
     questions = [q.strip() for q in body.questions if q.strip()]
     api_key = _resolve_api_key(body.api_key)
-    if not api_key:
+    if body.model == 'jev' and not api_key:
         raise HTTPException(400, 'Enter your TypeSafe API key in Session access.')
     if not questions:
         raise HTTPException(400, 'Add at least one question.')
@@ -187,18 +209,10 @@ def evaluate_batch(document_id: str, body: EvaluateRequest):
         with store.render_lock:
             render_page(document['data'], p - 1, page_items, document['turns'].get(p), True, None, 1.5)
         render_seconds = perf_counter() - render_started
-        page_text = '\n'.join(i['text'] for i in page_items)
         try:
             eval_started = perf_counter()
-            response = client.system_one(state=page_text, questions=_build_questions(page_items, questions),
-                                          model='jev-latest')
-            return p, {
-                'answers': {name: {'probabilities': a.probabilities} for name, a in response.answers.items()},
-                'usage': {'input_tokens': response.usage.input_tokens, 'output_tokens': response.usage.output_tokens},
-                'model': response.model,
-                'eval_seconds': perf_counter() - eval_started,
-                'render_seconds': render_seconds,
-            }
+            result = _decide(client, body.model, page_items, questions)
+            return p, {**result, 'eval_seconds': perf_counter() - eval_started, 'render_seconds': render_seconds}
         except Exception as exc:
             detail = str(exc).replace(api_key, '[redacted]') if api_key else str(exc)
             return p, {'error': detail, 'render_seconds': render_seconds}
@@ -206,7 +220,7 @@ def evaluate_batch(document_id: str, body: EvaluateRequest):
     batch_started = perf_counter()
     page_stats = {}
     try:
-        with TypeSafeClient(api_key=api_key) as client:
+        with _open_client(body.model, api_key) as client:
             with ThreadPoolExecutor(max_workers=min(8, len(pages))) as pool:
                 futures = [pool.submit(process_page, client, p) for p in pages]
                 for future in as_completed(futures):
